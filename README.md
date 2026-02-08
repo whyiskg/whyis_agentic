@@ -11,6 +11,7 @@ A Whyis plugin that provides Gen AI agentic inference capabilities for answering
 - **Autonomic Agent**: `QuestionAnsweringAgent` extends Whyis's `UpdateChangeService` to monitor and answer questions
 - **ActivityStream Integration**: Works with ActivityStream Note posts from the `whyis_fediverse` plugin
 - **GitHub Copilot SDK**: Uses GitHub Copilot Chat Completions API (via OpenAI Python SDK)
+- **Entity Resolution Tool**: AI can resolve entities in the knowledge graph using Whyis's entity resolver
 - **Provenance Tracking**: Full RDF provenance via nanopublications
 - **Transparent Reasoning**: Records thinking steps and tool usage
 - **RDF Vocabulary**: Complete ontology in `vocab.ttl`
@@ -59,13 +60,14 @@ export AGENTIC_SYSTEM_PROMPT="You are a helpful assistant..."
 2. **Detect**: Questions are identified by:
    - Ending with `?`
    - Starting with question words (what, when, where, who, why, how, etc.)
-3. **Generate**: Uses GitHub Copilot Chat Completions API to generate an answer
-4. **Record**: Creates a nanopublication with:
+3. **Resolve Entities**: If needed, the AI uses the entity resolver tool to look up entities in the knowledge graph
+4. **Generate**: Uses GitHub Copilot Chat Completions API to generate an answer
+5. **Record**: Creates a nanopublication with:
    - The answer as an `as:Note` in reply to the question
    - RDF type `agentic:AnsweredPost`
    - Provenance showing the activity and AI provider
-   - Thinking steps for transparency
-5. **Publish**: Publishes to the knowledge graph for whyis_fediverse to display
+   - Thinking steps and tool usage for transparency
+6. **Publish**: Publishes to the knowledge graph for whyis_fediverse to display
 
 ## RDF Vocabulary
 
@@ -77,6 +79,27 @@ The plugin defines an RDF vocabulary in `vocab.ttl`:
 - `agentic:ThinkingStep` - A step in the reasoning process
 - `agentic:answersQuestion` - Activity of answering a question
 - And more...
+
+## Entity Resolution Tool
+
+The agent includes an entity resolution tool that allows the AI to look up entities in the Whyis knowledge graph. When answering questions, the AI can:
+
+- Resolve entity names to URIs (e.g., "Tim Berners-Lee" → `http://dbpedia.org/resource/Tim_Berners-Lee`)
+- Disambiguate terms using context
+- Get entity types and metadata
+- Ground answers in the actual knowledge graph data
+
+**Example interaction:**
+
+```
+Question: "Who created RDF?"
+AI thinks: Let me resolve "RDF" to see what's in the knowledge graph
+Tool call: resolve_entity(term="RDF", context="creator")
+Tool result: [{uri: "http://www.w3.org/1999/02/22-rdf-syntax-ns#", label: "RDF", types: ["Standard"]}]
+AI uses the URI to provide grounded answer
+```
+
+The tool uses Whyis's built-in `EntityResolverListener` plugin system, which can be configured with different backends (SPARQL, Fuseki, Neptune, etc.).
 
 ## Example
 

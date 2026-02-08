@@ -94,6 +94,35 @@ The answer is stored as RDF in the knowledge graph:
 3. QuestionAnsweringAgent detects and answers
 4. Answers appear in whyis_fediverse discussion threads
 
+## Entity Resolution Tool
+
+The agent automatically uses Whyis's entity resolver to ground answers in the knowledge graph:
+
+### How It Works
+
+1. When the AI needs to look up an entity, it calls the `resolve_entity` tool
+2. The tool queries Whyis's entity resolver (configured in your Whyis app)
+3. Returns matching entities with URIs, labels, types, and relevance scores
+4. AI uses this information to provide more accurate, grounded answers
+
+### Example
+
+**Question:** "What did Tim Berners-Lee create?"
+
+**AI's internal process:**
+1. Calls `resolve_entity(term="Tim Berners-Lee")`
+2. Gets: `{uri: "http://dbpedia.org/resource/Tim_Berners-Lee", label: "Tim Berners-Lee", types: ["Person"]}`
+3. Uses the URI to provide grounded answer about his work
+
+### Configuration
+
+The entity resolver uses Whyis's configured `EntityResolverListener` plugins:
+- SPARQL endpoints (via Fuseki plugin)
+- Neptune database (via Neptune plugin)
+- Custom resolvers (implement `EntityResolverListener`)
+
+No additional configuration needed - the tool automatically uses whatever entity resolver is available in your Whyis app.
+
 ## Customization
 
 ### Custom System Prompt

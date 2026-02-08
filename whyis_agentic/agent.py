@@ -3,8 +3,9 @@
 import json
 import logging
 import os
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+import flask
 import rdflib
 from whyis import autonomic
 from whyis.namespace import NS
@@ -53,6 +54,86 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
             "about knowledge graphs and semantic web.",
         )
         self._copilot_client = None
+        self._tools_enabled = True
+
+    def _resolve_entity(self, term: str, context: Optional[str] = None) -> List[Dict]:
+        """
+        Resolve an entity using Whyis's entity resolver plugin.
+
+        This tool allows the AI to look up entities in the knowledge graph
+        to provide more accurate and grounded answers.
+
+        Args:
+            term: The term/entity to resolve (e.g., "RDF", "Tim Berners-Lee")
+            context: Optional context to help with disambiguation
+
+        Returns:
+            List of resolved entities with their URIs and labels
+        """
+        try:
+            # Access the current Flask app context
+            app = flask.current_app
+            if not hasattr(app, "resolve"):
+                logger.warning("Entity resolver not available in Whyis app")
+                return []
+
+            # Call Whyis's entity resolver
+            results = app.resolve(term, type=None, context=context, label=True)
+
+            # Format results for the AI
+            formatted_results = []
+            for result in results[:5]:  # Limit to top 5 results
+                formatted_results.append(
+                    {
+                        "uri": str(result.get("node", "")),
+                        "label": str(result.get("label", "")),
+                        "types": result.get("types", "").split("||") if result.get("types") else [],
+                        "score": float(result.get("score", 0)),
+                    }
+                )
+
+            logger.info(f"Resolved entity '{term}': found {len(formatted_results)} results")
+            return formatted_results
+
+        except Exception as e:
+            logger.error(f"Error resolving entity '{term}': {e}")
+            return []
+
+    def _get_entity_resolver_tool_definition(self) -> Dict:
+        """
+        Get the tool definition for entity resolution.
+
+        Returns tool specification in OpenAI function calling format.
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": "resolve_entity",
+                "description": (
+                    "Resolve an entity or term in the knowledge graph. "
+                    "Use this to look up URIs and information about people, places, "
+                    "concepts, or any named entity mentioned in questions. "
+                    "Returns the entity URI, label, types, and relevance score."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "term": {
+                            "type": "string",
+                            "description": (
+                                "The term or entity name to resolve "
+                                "(e.g., 'RDF', 'semantic web')"
+                            ),
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Optional context to help disambiguate the term",
+                        },
+                    },
+                    "required": ["term"],
+                },
+            },
+        }
 
     def getInputClass(self):  # noqa: N802 - Whyis convention
         """Questions are ActivityStream Note objects."""
@@ -127,33 +208,115 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
             )
 
         try:
-            # Use GitHub Copilot Chat Completions API
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": question},
-                ],
-                temperature=0.7,
-            )
-
-            answer = response.choices[0].message.content or "I couldn't generate an answer."
-
-            # Record thinking steps from usage
-            thinking_steps = [
-                {
-                    "type": "inference",
-                    "provider": "github_copilot",
-                    "model": self.model,
-                    "tokens": {
-                        "prompt": response.usage.prompt_tokens,
-                        "completion": response.usage.completion_tokens,
-                        "total": response.usage.total_tokens,
-                    },
-                }
+            # Prepare messages
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": question},
             ]
 
-            return (answer, thinking_steps)
+            # Prepare tools if enabled
+            tools = []
+            if self._tools_enabled:
+                tools.append(self._get_entity_resolver_tool_definition())
+
+            thinking_steps = []
+            max_iterations = 3  # Prevent infinite loops
+            iteration = 0
+
+            while iteration < max_iterations:
+                iteration += 1
+
+                # Call GitHub Copilot Chat Completions API
+                response_kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                }
+                if tools:
+                    response_kwargs["tools"] = tools
+
+                response = client.chat.completions.create(**response_kwargs)
+
+                message = response.choices[0].message
+                finish_reason = response.choices[0].finish_reason
+
+                # Record usage
+                thinking_steps.append(
+                    {
+                        "type": "inference",
+                        "provider": "github_copilot",
+                        "model": self.model,
+                        "iteration": iteration,
+                        "tokens": {
+                            "prompt": response.usage.prompt_tokens,
+                            "completion": response.usage.completion_tokens,
+                            "total": response.usage.total_tokens,
+                        },
+                    }
+                )
+
+                # Check if we have a final answer
+                if finish_reason == "stop" or not message.tool_calls:
+                    answer = message.content or "I couldn't generate an answer."
+                    return (answer, thinking_steps)
+
+                # Handle tool calls
+                if message.tool_calls:
+                    # Add assistant's message with tool calls to conversation
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": message.content,
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.function.name,
+                                        "arguments": tc.function.arguments,
+                                    },
+                                }
+                                for tc in message.tool_calls
+                            ],
+                        }
+                    )
+
+                    # Execute each tool call
+                    for tool_call in message.tool_calls:
+                        function_name = tool_call.function.name
+                        try:
+                            function_args = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            function_args = {}
+
+                        # Execute the function
+                        if function_name == "resolve_entity":
+                            result = self._resolve_entity(
+                                term=function_args.get("term", ""),
+                                context=function_args.get("context"),
+                            )
+                            thinking_steps.append(
+                                {
+                                    "type": "tool_call",
+                                    "tool": "resolve_entity",
+                                    "arguments": function_args,
+                                    "result_count": len(result),
+                                }
+                            )
+                        else:
+                            result = {"error": f"Unknown function: {function_name}"}
+
+                        # Add tool result to conversation
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps(result),
+                            }
+                        )
+
+            # If we hit max iterations, return what we have
+            return ("Maximum iterations reached while processing tools.", thinking_steps)
 
         except Exception as e:
             logger.error(f"Error generating answer with GitHub Copilot: {e}")
