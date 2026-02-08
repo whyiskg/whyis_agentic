@@ -1,6 +1,6 @@
 # Core dependencies
-requests>=2.25.0
-pydantic>=2.0.0
+rdflib>=6.0.0
+flask-pluginengine>=0.3.0
 
-# GitHub Copilot SDK support
+# AI provider support
 openai>=1.0.0

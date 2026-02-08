@@ -1,262 +1,192 @@
-"""Core inference agent implementation with AI provider support."""
+"""Whyis Agentic Inference Agents."""
 
+import json
 import logging
-from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+import os
+from typing import Dict, List
 
-from pydantic import BaseModel, Field
+import rdflib
+from whyis import autonomic
+from whyis.namespace import NS
 
 logger = logging.getLogger(__name__)
 
+# Import AI provider
+try:
+    from openai import OpenAI
 
-class ProviderType(str, Enum):
-    """Supported AI provider types."""
-
-    GITHUB = "github"
-    # Future providers can be added here
-    # OPENAI = "openai"
-    # ANTHROPIC = "anthropic"
-
-
-class Message(BaseModel):
-    """A message in a conversation."""
-
-    role: str = Field(..., description="Role of the message sender (system, user, assistant)")
-    content: str = Field(..., description="Content of the message")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logger.warning("OpenAI SDK not available. Install with: pip install openai")
 
 
-class ToolDefinition(BaseModel):
-    """Definition of a tool that can be used by the agent."""
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    name: str = Field(..., description="Name of the tool")
-    description: str = Field(..., description="Description of what the tool does")
-    parameters: Dict[str, Any] = Field(
-        default_factory=dict, description="JSON schema of tool parameters"
-    )
-    function: Optional[Callable] = Field(default=None, description="Callable function")
-
-
-class AgentConfig(BaseModel):
-    """Configuration for an inference agent."""
-
-    name: str = Field(..., description="Agent name")
-    provider: ProviderType = Field(..., description="AI provider to use")
-    model: str = Field(default="gpt-4", description="Model identifier")
-    system_prompt: str = Field(
-        default="You are a helpful AI assistant.", description="System prompt for the agent"
-    )
-    tools: List[ToolDefinition] = Field(default_factory=list, description="Available tools")
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
-    max_tokens: Optional[int] = Field(default=None, description="Maximum tokens in response")
-    api_key: Optional[str] = Field(default=None, description="API key for the provider")
-    api_base: Optional[str] = Field(default=None, description="Custom API base URL")
-
-
-class InferenceProvider(ABC):
-    """Abstract base class for AI inference providers."""
-
-    @abstractmethod
-    def complete(
-        self, messages: List[Message], tools: Optional[List[ToolDefinition]] = None, **kwargs
-    ) -> Message:
-        """
-        Generate a completion from the provider.
-
-        Args:
-            messages: Conversation history
-            tools: Available tools for the agent
-            **kwargs: Provider-specific parameters
-
-        Returns:
-            Generated message response
-        """
-        pass
-
-    @abstractmethod
-    def stream_complete(
-        self, messages: List[Message], tools: Optional[List[ToolDefinition]] = None, **kwargs
-    ):
-        """
-        Stream completions from the provider.
-
-        Args:
-            messages: Conversation history
-            tools: Available tools for the agent
-            **kwargs: Provider-specific parameters
-
-        Yields:
-            Message chunks
-        """
-        pass
-
-
-class InferenceAgent:
+class QuestionAnsweringAgent(autonomic.UpdateChangeService):
     """
-    Gen AI inference agent with configurable prompts and tools.
+    Autonomic agent that answers questions in ActivityStream posts.
 
-    This agent can use various AI providers (GitHub Copilot, etc.) and supports
-    tool calling for enhanced capabilities.
+    This agent:
+    - Monitors for ActivityStream Note posts that are questions
+    - Uses AI (GitHub Copilot or other providers) to generate answers
+    - Records the answer as a nanopublication with provenance
+    - Records thinking/reasoning steps for transparency
     """
 
-    def __init__(self, config: AgentConfig):
+    activity_class = NS.agentic.answersQuestion
+
+    def __init__(self):
+        super().__init__()
+        self.provider = os.getenv("AGENTIC_PROVIDER", "github")
+        self.model = os.getenv("AGENTIC_MODEL", "gpt-4")
+        self.api_key = os.getenv("GITHUB_TOKEN") or os.getenv("OPENAI_API_KEY")
+        self.system_prompt = os.getenv(
+            "AGENTIC_SYSTEM_PROMPT",
+            "You are a helpful AI assistant that answers questions "
+            "about knowledge graphs and semantic web.",
+        )
+        self._client = None
+
+    def getInputClass(self):  # noqa: N802 - Whyis convention
+        """Questions are ActivityStream Note objects."""
+        return NS.astr.Note
+
+    def getOutputClass(self):  # noqa: N802 - Whyis convention
+        """Output is AnsweredPost with the answer."""
+        return NS.agentic.AnsweredPost
+
+    def get_query(self):
         """
-        Initialize the inference agent.
+        SPARQL query to find unanswered questions.
 
-        Args:
-            config: Agent configuration
+        Looks for ActivityStream Notes that:
+        - Have content ending with '?' or starting with question words
+        - Don't already have an answer from this agent
         """
-        self.config = config
-        self.conversation_history: List[Message] = []
-        self.provider = self._initialize_provider()
+        return """
+        PREFIX as: <https://www.w3.org/ns/activitystreams#>
+        PREFIX agentic: <http://vocab.rpi.edu/whyis/agentic/>
 
-        # Add system prompt to conversation
-        if config.system_prompt:
-            self.conversation_history.append(Message(role="system", content=config.system_prompt))
+        SELECT DISTINCT ?resource WHERE {
+            ?resource a as:Note ;
+                      as:content ?content .
 
-    def _initialize_provider(self) -> InferenceProvider:
-        """Initialize the AI provider based on configuration."""
-        if self.config.provider == ProviderType.GITHUB:
-            from whyis_agentic.providers.github import GitHubProvider
-
-            return GitHubProvider(
-                api_key=self.config.api_key, api_base=self.config.api_base, model=self.config.model
+            # Must be a question (ends with ? or starts with question word)
+            FILTER (
+                REGEX(?content, "\\\\?$") ||
+                REGEX(?content,
+                    "^(what|when|where|who|why|how|can|could|would|should|is|are|do|does)\\\\s",
+                    "i")
             )
-        else:
-            raise ValueError(f"Unsupported provider: {self.config.provider}")
 
-    def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None):
+            # Not already answered
+            FILTER NOT EXISTS {
+                ?resource a agentic:AnsweredPost .
+            }
+        }
         """
-        Add a message to the conversation history.
+
+    def _get_client(self):
+        """Lazy initialization of AI client."""
+        if self._client is None and OPENAI_AVAILABLE and self.api_key:
+            if self.provider == "github":
+                self._client = OpenAI(
+                    api_key=self.api_key, base_url="https://api.githubcopilot.com"
+                )
+            else:
+                self._client = OpenAI(api_key=self.api_key)
+        return self._client
+
+    def _generate_answer(self, question: str) -> tuple[str, List[Dict]]:
+        """
+        Generate an answer using the AI provider.
 
         Args:
-            role: Message role (user, assistant, system)
-            content: Message content
-            metadata: Optional metadata
-        """
-        message = Message(role=role, content=content, metadata=metadata or {})
-        self.conversation_history.append(message)
-
-    def add_tool(self, tool: ToolDefinition):
-        """
-        Add a tool to the agent's available tools.
-
-        Args:
-            tool: Tool definition
-        """
-        if tool not in self.config.tools:
-            self.config.tools.append(tool)
-
-    def generate_response(self, user_message: str, record_thinking: bool = True) -> Message:
-        """
-        Generate a response to a user message.
-
-        Args:
-            user_message: User's input message
-            record_thinking: Whether to record intermediate thinking steps
+            question: The question text
 
         Returns:
-            Agent's response message
+            Tuple of (answer_text, thinking_steps)
         """
-        # Add user message to history
-        self.add_message("user", user_message)
+        client = self._get_client()
+        if not client:
+            return ("I don't have access to an AI provider to answer this question.", [])
 
         try:
-            # Generate response from provider
-            response = self.provider.complete(
-                messages=self.conversation_history,
-                tools=self.config.tools if self.config.tools else None,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": question},
+                ],
+                temperature=0.7,
             )
 
-            # Add response to history
-            self.conversation_history.append(response)
+            answer = response.choices[0].message.content or "I couldn't generate an answer."
 
-            # Handle tool calls if present
-            if response.metadata.get("tool_calls"):
-                response = self._handle_tool_calls(response, record_thinking)
+            # Record thinking steps from usage
+            thinking_steps = [
+                {
+                    "type": "inference",
+                    "provider": self.provider,
+                    "model": self.model,
+                    "tokens": {
+                        "prompt": response.usage.prompt_tokens,
+                        "completion": response.usage.completion_tokens,
+                        "total": response.usage.total_tokens,
+                    },
+                }
+            ]
 
-            return response
+            return (answer, thinking_steps)
 
         except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            error_message = Message(
-                role="assistant",
-                content=f"I encountered an error: {str(e)}",
-                metadata={"error": True},
-            )
-            self.conversation_history.append(error_message)
-            return error_message
+            logger.error(f"Error generating answer: {e}")
+            return (f"Error generating answer: {str(e)}", [])
 
-    def _handle_tool_calls(self, message: Message, record_thinking: bool) -> Message:
+    def process_nanopub(self, i, o, nanopub):
         """
-        Handle tool calls in a message.
+        Process a question post and generate an answer.
 
         Args:
-            message: Message containing tool calls
-            record_thinking: Whether to record tool execution as thinking
-
-        Returns:
-            Final response after tool execution
+            i: Input resource (the question post)
+            o: Output resource (will become the answered post)
+            nanopub: Nanopublication to record the answer
         """
-        tool_calls = message.metadata.get("tool_calls", [])
-        tool_results = []
+        # Get the question content
+        question = i.value(NS.astr.content)
+        if not question:
+            logger.warning(f"No content found for {i.identifier}")
+            return
 
-        for tool_call in tool_calls:
-            tool_name = tool_call.get("name")
-            tool_args = tool_call.get("arguments", {})
+        question_text = str(question)
+        logger.info(f"Answering question: {question_text[:100]}...")
 
-            # Ensure tool_args is a dictionary
-            if not isinstance(tool_args, dict):
-                logger.error(f"Tool arguments must be a dictionary, got {type(tool_args)}")
-                tool_results.append({"tool": tool_name, "error": "Invalid arguments format"})
-                continue
+        # Generate answer
+        answer_text, thinking_steps = self._generate_answer(question_text)
 
-            # Find the tool
-            tool = next((t for t in self.config.tools if t.name == tool_name), None)
+        # Add answer to output
+        o.add(NS.agentic.hasQuestion, rdflib.Literal(question_text))
+        o.add(NS.agentic.hasAnswer, rdflib.Literal(answer_text))
+        o.add(NS.RDF.type, NS.agentic.AnsweredPost)
 
-            if tool and tool.function:
-                try:
-                    result = tool.function(**tool_args)
-                    tool_results.append({"tool": tool_name, "result": result})
+        # Create answer as an ActivityStream Note in reply
+        answer_post = nanopub.assertion.resource(rdflib.BNode())
+        answer_post.add(NS.RDF.type, NS.astr.Note)
+        answer_post.add(NS.astr.content, rdflib.Literal(answer_text))
+        answer_post.add(NS.astr.inReplyTo, i.identifier)
+        o.add(NS.astr.replies, answer_post.identifier)
 
-                    if record_thinking:
-                        # Record tool execution as thinking
-                        self.add_message(
-                            "assistant",
-                            f"[Thinking: Used {tool_name} with args {tool_args}]",
-                            metadata={"thinking": True, "tool_call": True},
-                        )
-                except Exception as e:
-                    logger.error(f"Error executing tool {tool_name}: {e}")
-                    tool_results.append({"tool": tool_name, "error": str(e)})
+        # Record thinking steps
+        for idx, step in enumerate(thinking_steps):
+            step_node = nanopub.provenance.resource(rdflib.BNode())
+            step_node.add(NS.RDF.type, NS.agentic.ThinkingStep)
+            step_node.add(NS.RDFS.label, rdflib.Literal(f"Thinking step {idx + 1}"))
 
-        # If we executed tools, generate a final response
-        if tool_results:
-            self.add_message(
-                "user", f"Tool results: {tool_results}", metadata={"tool_results": True}
-            )
-            return self.provider.complete(
-                messages=self.conversation_history,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-            )
+            # Add step details
+            for key, value in step.items():
+                if isinstance(value, dict):
+                    value = json.dumps(value)
+                step_node.add(NS.RDFS.comment, rdflib.Literal(f"{key}: {value}"))
 
-        return message
+            o.add(NS.agentic.hasThinkingStep, step_node.identifier)
 
-    def reset_conversation(self):
-        """Reset the conversation history, keeping only the system prompt."""
-        system_messages = [msg for msg in self.conversation_history if msg.role == "system"]
-        self.conversation_history = system_messages
-
-    def get_conversation_history(self) -> List[Message]:
-        """Get the full conversation history."""
-        return self.conversation_history.copy()
-
-    def get_thinking_steps(self) -> List[Message]:
-        """Get only the thinking/research messages from conversation history."""
-        return [msg for msg in self.conversation_history if msg.metadata.get("thinking", False)]
+        logger.info(f"Generated answer for {i.identifier}")

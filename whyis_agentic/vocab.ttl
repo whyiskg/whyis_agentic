@@ -1,0 +1,115 @@
+@prefix : <http://vocab.rpi.edu/whyis/> .
+@prefix dc: <http://purl.org/dc/terms/> .
+@prefix np: <http://www.nanopub.org/nschema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix sio: <http://semanticscience.org/resource/> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix auth: <http://vocab.tw.rpi.edu/auth/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix rdfg: <http://www.w3.org/2004/03/trix/rdfg-1/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix whyis: <http://vocab.rpi.edu/whyis/> .
+@prefix as: <https://www.w3.org/ns/activitystreams#> .
+@prefix agentic: <http://vocab.rpi.edu/whyis/agentic/> .
+
+# Agentic Inference Vocabulary
+
+agentic:AgenticAgent a owl:Class ;
+    rdfs:label "Agentic Agent" ;
+    rdfs:comment "An AI agent that can answer questions and perform inference" ;
+    rdfs:subClassOf whyis:Agent .
+
+agentic:DialogAgent a owl:Class ;
+    rdfs:label "Dialog Agent" ;
+    rdfs:comment "An agent that participates in ActivityStream conversations" ;
+    rdfs:subClassOf agentic:AgenticAgent .
+
+agentic:QuestionPost a owl:Class ;
+    rdfs:label "Question Post" ;
+    rdfs:comment "An ActivityStream post that contains a question" ;
+    rdfs:subClassOf as:Note .
+
+agentic:AnsweredPost a owl:Class ;
+    rdfs:label "Answered Post" ;
+    rdfs:comment "A question post that has been answered by an agent" ;
+    rdfs:subClassOf agentic:QuestionPost .
+
+agentic:hasQuestion a owl:ObjectProperty ;
+    rdfs:label "has question" ;
+    rdfs:comment "Links to the question content" ;
+    rdfs:domain agentic:QuestionPost ;
+    rdfs:range rdfs:Literal .
+
+agentic:hasAnswer a owl:ObjectProperty ;
+    rdfs:label "has answer" ;
+    rdfs:comment "Links to the answer content" ;
+    rdfs:domain agentic:AnsweredPost ;
+    rdfs:range rdfs:Literal .
+
+agentic:hasThinkingStep a owl:ObjectProperty ;
+    rdfs:label "has thinking step" ;
+    rdfs:comment "Links to a thinking/reasoning step in the answer process" ;
+    rdfs:domain agentic:AnsweredPost ;
+    rdfs:range agentic:ThinkingStep .
+
+agentic:ThinkingStep a owl:Class ;
+    rdfs:label "Thinking Step" ;
+    rdfs:comment "A step in the agent's reasoning process" ;
+    rdfs:subClassOf prov:Activity .
+
+agentic:usedTool a owl:ObjectProperty ;
+    rdfs:label "used tool" ;
+    rdfs:comment "A tool that was used during reasoning" ;
+    rdfs:domain agentic:ThinkingStep ;
+    rdfs:range agentic:Tool .
+
+agentic:Tool a owl:Class ;
+    rdfs:label "Tool" ;
+    rdfs:comment "A tool available to an agent" ;
+    rdfs:subClassOf prov:Entity .
+
+agentic:toolName a owl:DatatypeProperty ;
+    rdfs:label "tool name" ;
+    rdfs:domain agentic:Tool ;
+    rdfs:range xsd:string .
+
+agentic:toolDescription a owl:DatatypeProperty ;
+    rdfs:label "tool description" ;
+    rdfs:domain agentic:Tool ;
+    rdfs:range xsd:string .
+
+agentic:hasProvider a owl:ObjectProperty ;
+    rdfs:label "has provider" ;
+    rdfs:comment "The AI provider used by the agent" ;
+    rdfs:domain agentic:AgenticAgent ;
+    rdfs:range agentic:AIProvider .
+
+agentic:AIProvider a owl:Class ;
+    rdfs:label "AI Provider" ;
+    rdfs:comment "An AI inference service provider" ;
+    rdfs:subClassOf prov:SoftwareAgent .
+
+agentic:GitHubCopilotProvider a agentic:AIProvider ;
+    rdfs:label "GitHub Copilot Provider" ;
+    rdfs:comment "GitHub Copilot AI provider" .
+
+agentic:hasSystemPrompt a owl:DatatypeProperty ;
+    rdfs:label "has system prompt" ;
+    rdfs:comment "The system prompt configured for the agent" ;
+    rdfs:domain agentic:AgenticAgent ;
+    rdfs:range xsd:string .
+
+agentic:hasTemperature a owl:DatatypeProperty ;
+    rdfs:label "has temperature" ;
+    rdfs:comment "The sampling temperature parameter" ;
+    rdfs:domain agentic:AgenticAgent ;
+    rdfs:range xsd:decimal .
+
+agentic:answersQuestion a prov:Activity ;
+    rdfs:label "answers question" ;
+    rdfs:comment "Activity of answering a question" ;
+    rdfs:subClassOf prov:Activity .

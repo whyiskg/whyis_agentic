@@ -8,11 +8,15 @@ setup(
     name="whyis_agentic",
     version="0.1.0",
     author="Whyis Knowledge Graph Team",
-    description="An agentic framework plugin for Whyis",
+    description="A Gen AI agentic inference plugin for Whyis",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/whyiskg/whyis_agentic",
     packages=find_packages(exclude=["tests*"]),
+    package_data={
+        'whyis_agentic': ['vocab.ttl'],
+    },
+    include_package_data=True,
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
@@ -25,8 +29,8 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        "requests>=2.25.0",
-        "pydantic>=2.0.0",
+        "rdflib>=6.0.0",
+        "flask-pluginengine>=0.3.0",
     ],
     extras_require={
         "dev": [
@@ -36,7 +40,7 @@ setup(
             "ruff>=0.1.0",
         ],
         "github": [
-            "openai>=1.0.0",  # GitHub Copilot uses OpenAI SDK
+            "openai>=1.0.0",
         ],
     },
 )
