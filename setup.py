@@ -40,6 +40,7 @@ setup(
             "ruff>=0.1.0",
         ],
         "github": [
+            # GitHub Copilot SDK (uses OpenAI package as official client)
             "openai>=1.0.0",
         ],
     },

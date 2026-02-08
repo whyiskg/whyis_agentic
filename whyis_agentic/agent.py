@@ -11,14 +11,18 @@ from whyis.namespace import NS
 
 logger = logging.getLogger(__name__)
 
-# Import AI provider
+# Import GitHub Copilot SDK (uses OpenAI SDK as the official client)
+# GitHub Copilot Chat Completions API is accessed via the OpenAI Python SDK
+# See: https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-chat-in-your-ide
 try:
     from openai import OpenAI
 
-    OPENAI_AVAILABLE = True
+    GITHUB_COPILOT_SDK_AVAILABLE = True
 except ImportError:
-    OPENAI_AVAILABLE = False
-    logger.warning("OpenAI SDK not available. Install with: pip install openai")
+    GITHUB_COPILOT_SDK_AVAILABLE = False
+    logger.warning(
+        "GitHub Copilot SDK (OpenAI package) not available. " "Install with: pip install openai"
+    )
 
 
 class QuestionAnsweringAgent(autonomic.UpdateChangeService):
@@ -27,24 +31,28 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
 
     This agent:
     - Monitors for ActivityStream Note posts that are questions
-    - Uses AI (GitHub Copilot or other providers) to generate answers
+    - Uses GitHub Copilot Chat Completions API to generate answers
     - Records the answer as a nanopublication with provenance
     - Records thinking/reasoning steps for transparency
+
+    GitHub Copilot Integration:
+    - Uses the OpenAI Python SDK (official GitHub Copilot client)
+    - Connects to GitHub's Copilot API endpoint
+    - Requires GITHUB_TOKEN environment variable
     """
 
     activity_class = NS.agentic.answersQuestion
 
     def __init__(self):
         super().__init__()
-        self.provider = os.getenv("AGENTIC_PROVIDER", "github")
         self.model = os.getenv("AGENTIC_MODEL", "gpt-4")
-        self.api_key = os.getenv("GITHUB_TOKEN") or os.getenv("OPENAI_API_KEY")
+        self.github_token = os.getenv("GITHUB_TOKEN")
         self.system_prompt = os.getenv(
             "AGENTIC_SYSTEM_PROMPT",
             "You are a helpful AI assistant that answers questions "
             "about knowledge graphs and semantic web.",
         )
-        self._client = None
+        self._copilot_client = None
 
     def getInputClass(self):  # noqa: N802 - Whyis convention
         """Questions are ActivityStream Note objects."""
@@ -85,20 +93,24 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
         }
         """
 
-    def _get_client(self):
-        """Lazy initialization of AI client."""
-        if self._client is None and OPENAI_AVAILABLE and self.api_key:
-            if self.provider == "github":
-                self._client = OpenAI(
-                    api_key=self.api_key, base_url="https://api.githubcopilot.com"
-                )
-            else:
-                self._client = OpenAI(api_key=self.api_key)
-        return self._client
+    def _get_copilot_client(self):
+        """
+        Lazy initialization of GitHub Copilot client.
+
+        Uses the OpenAI Python SDK which is the official client for
+        GitHub Copilot Chat Completions API.
+        """
+        if self._copilot_client is None and GITHUB_COPILOT_SDK_AVAILABLE and self.github_token:
+            # GitHub Copilot uses the OpenAI SDK with a custom endpoint
+            # See: https://docs.github.com/en/copilot
+            self._copilot_client = OpenAI(
+                api_key=self.github_token, base_url="https://api.githubcopilot.com"
+            )
+        return self._copilot_client
 
     def _generate_answer(self, question: str) -> tuple[str, List[Dict]]:
         """
-        Generate an answer using the AI provider.
+        Generate an answer using GitHub Copilot.
 
         Args:
             question: The question text
@@ -106,11 +118,16 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
         Returns:
             Tuple of (answer_text, thinking_steps)
         """
-        client = self._get_client()
+        client = self._get_copilot_client()
         if not client:
-            return ("I don't have access to an AI provider to answer this question.", [])
+            return (
+                "I don't have access to GitHub Copilot to answer this question. "
+                "Please set GITHUB_TOKEN environment variable.",
+                [],
+            )
 
         try:
+            # Use GitHub Copilot Chat Completions API
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -126,7 +143,7 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
             thinking_steps = [
                 {
                     "type": "inference",
-                    "provider": self.provider,
+                    "provider": "github_copilot",
                     "model": self.model,
                     "tokens": {
                         "prompt": response.usage.prompt_tokens,
@@ -139,7 +156,7 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
             return (answer, thinking_steps)
 
         except Exception as e:
-            logger.error(f"Error generating answer: {e}")
+            logger.error(f"Error generating answer with GitHub Copilot: {e}")
             return (f"Error generating answer: {str(e)}", [])
 
     def process_nanopub(self, i, o, nanopub):

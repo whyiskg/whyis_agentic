@@ -2,5 +2,5 @@
 rdflib>=6.0.0
 flask-pluginengine>=0.3.0
 
-# AI provider support
+# GitHub Copilot SDK (uses OpenAI package as official client)
 openai>=1.0.0

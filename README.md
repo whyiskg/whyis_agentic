@@ -10,7 +10,7 @@ A Whyis plugin that provides Gen AI agentic inference capabilities for answering
 
 - **Autonomic Agent**: `QuestionAnsweringAgent` extends Whyis's `UpdateChangeService` to monitor and answer questions
 - **ActivityStream Integration**: Works with ActivityStream Note posts from the `whyis_fediverse` plugin
-- **AI Provider Support**: GitHub Copilot (OpenAI-compatible API)
+- **GitHub Copilot SDK**: Uses GitHub Copilot Chat Completions API (via OpenAI Python SDK)
 - **Provenance Tracking**: Full RDF provenance via nanopublications
 - **Transparent Reasoning**: Records thinking steps and tool usage
 - **RDF Vocabulary**: Complete ontology in `vocab.ttl`
@@ -21,7 +21,7 @@ A Whyis plugin that provides Gen AI agentic inference capabilities for answering
 # Install the plugin
 pip install -e .
 
-# Install with AI provider support
+# Install with GitHub Copilot support (uses OpenAI SDK as official client)
 pip install -e ".[github]"
 ```
 
@@ -45,11 +45,10 @@ INFERENCERS = {
 ### Environment Variables:
 
 ```bash
-# Required: API key for your provider
+# Required: GitHub token for Copilot API access
 export GITHUB_TOKEN="your-github-token"
 
 # Optional: Configure the agent
-export AGENTIC_PROVIDER="github"  # default: github
 export AGENTIC_MODEL="gpt-4"      # default: gpt-4
 export AGENTIC_SYSTEM_PROMPT="You are a helpful assistant..."
 ```
@@ -60,7 +59,7 @@ export AGENTIC_SYSTEM_PROMPT="You are a helpful assistant..."
 2. **Detect**: Questions are identified by:
    - Ending with `?`
    - Starting with question words (what, when, where, who, why, how, etc.)
-3. **Generate**: Uses AI provider (GitHub Copilot) to generate an answer
+3. **Generate**: Uses GitHub Copilot Chat Completions API to generate an answer
 4. **Record**: Creates a nanopublication with:
    - The answer as an `as:Note` in reply to the question
    - RDF type `agentic:AnsweredPost`

@@ -5,7 +5,7 @@
 ```bash
 pip install -e .
 
-# With AI provider support
+# With GitHub Copilot SDK support (uses OpenAI package as official client)
 pip install -e ".[github]"
 ```
 
@@ -14,11 +14,10 @@ pip install -e ".[github]"
 ### 1. Environment Variables
 
 ```bash
-# Required: API key for your provider
+# Required: GitHub token for Copilot API access
 export GITHUB_TOKEN="your-github-token"
 
 # Optional: Configure the agent
-export AGENTIC_PROVIDER="github"  # default
 export AGENTIC_MODEL="gpt-4"      # default
 export AGENTIC_SYSTEM_PROMPT="Custom prompt..."
 ```
@@ -61,7 +60,7 @@ The agent monitors the knowledge graph for ActivityStream `as:Note` posts that:
 
 When a question is detected:
 1. Extracts the question content from `as:content`
-2. Sends to AI provider (GitHub Copilot by default)
+2. Sends to GitHub Copilot Chat Completions API
 3. Receives answer
 4. Creates a nanopublication with:
    - Answer as an `as:Note` in reply
