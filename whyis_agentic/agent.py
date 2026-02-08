@@ -210,6 +210,12 @@ class InferenceAgent:
             tool_name = tool_call.get("name")
             tool_args = tool_call.get("arguments", {})
 
+            # Ensure tool_args is a dictionary
+            if not isinstance(tool_args, dict):
+                logger.error(f"Tool arguments must be a dictionary, got {type(tool_args)}")
+                tool_results.append({"tool": tool_name, "error": "Invalid arguments format"})
+                continue
+
             # Find the tool
             tool = next((t for t in self.config.tools if t.name == tool_name), None)
 

@@ -78,8 +78,10 @@ class DialogAgent(InferenceAgent):
         # Pattern to detect questions
         self.question_patterns = [
             r"\?",  # Ends with question mark
-            # Question words
-            r"^(what|when|where|who|why|how|can|could|would|should|is|are|do|does)",
+            # Question words at start of sentence
+            r"^(what|when|where|who|why|how)\s+\w+",
+            # Modal verbs at start suggesting questions
+            r"^(can|could|would|should|will|do|does|did|is|are|was|were)\s+\w+",
         ]
 
     def is_question(self, content: str) -> bool:

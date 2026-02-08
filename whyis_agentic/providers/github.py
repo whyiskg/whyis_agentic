@@ -1,5 +1,6 @@
 """GitHub Copilot provider using OpenAI SDK."""
 
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -27,8 +28,16 @@ class GitHubProvider(InferenceProvider):
             api_key: GitHub API key or token (defaults to GITHUB_TOKEN env var)
             api_base: API base URL (defaults to GitHub Copilot endpoint)
             model: Model identifier
+
+        Raises:
+            ValueError: If no API key is provided or found in environment
         """
         self.api_key = api_key or os.getenv("GITHUB_TOKEN")
+        if not self.api_key:
+            raise ValueError(
+                "GitHub API key is required. Provide api_key parameter or set GITHUB_TOKEN "
+                "environment variable."
+            )
         self.api_base = api_base or "https://api.githubcopilot.com"
         self.model = model
         self._client = None
@@ -119,11 +128,20 @@ class GitHubProvider(InferenceProvider):
             tool_calls = []
             if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                 for tool_call in choice.message.tool_calls:
+                    # Parse arguments JSON string to dictionary
+                    try:
+                        arguments = json.loads(tool_call.function.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(
+                            f"Failed to parse tool call arguments: {tool_call.function.arguments}"
+                        )
+                        arguments = {}
+
                     tool_calls.append(
                         {
                             "id": tool_call.id,
                             "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments,
+                            "arguments": arguments,
                         }
                     )
 
