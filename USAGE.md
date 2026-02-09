@@ -1,0 +1,287 @@
+# Usage Guide
+
+## Installation
+
+```bash
+pip install -e .
+
+# With GitHub Copilot SDK support (uses OpenAI package as official client)
+pip install -e ".[github]"
+```
+
+## Configuration
+
+### 1. Environment Variables
+
+```bash
+# Required: GitHub token for Copilot API access
+export GITHUB_TOKEN="your-github-token"
+
+# Optional: Configure the agent
+export AGENTIC_MODEL="gpt-4"      # default
+export AGENTIC_SYSTEM_PROMPT="Custom prompt..."
+```
+
+### 2. Whyis Configuration
+
+In your Whyis application's `whyis.conf`:
+
+```python
+from whyis import autonomic
+from whyis_agentic.agent import QuestionAnsweringAgent
+
+SITE_NAME = "My Whyis Site"
+LOD_PREFIX = 'http://purl.org/whyis/local'
+VOCAB_FILE = "vocab.ttl"
+
+# Add the agentic agent to your inferencers
+INFERENCERS = {
+    "SETLr": autonomic.SETLr(),
+    "SETLMaker": autonomic.SETLMaker(),
+    "SDDAgent": autonomic.SDDAgent(),
+    "QuestionAnsweringAgent": QuestionAnsweringAgent()
+}
+```
+
+### 3. Plugin Installation
+
+The plugin will be automatically discovered by Whyis through Python's package system.
+
+## How It Works
+
+### 1. Question Detection
+
+The agent monitors the knowledge graph for ActivityStream `as:Note` posts that:
+- End with `?`
+- Start with question words (what, when, where, who, why, how, can, could, etc.)
+- Haven't been answered yet (no `agentic:AnsweredPost` type)
+
+### 2. Answer Generation
+
+When a question is detected:
+1. Extracts the question content from `as:content`
+2. Sends to GitHub Copilot Chat Completions API
+3. Receives answer
+4. Creates a nanopublication with:
+   - Answer as an `as:Note` in reply
+   - RDF type `agentic:AnsweredPost`
+   - Provenance showing the activity
+   - Thinking steps for transparency
+
+### 3. RDF Output
+
+The answer is stored as RDF in the knowledge graph:
+
+```turtle
+@prefix agentic: <http://vocab.rpi.edu/whyis/agentic/> .
+@prefix as: <https://www.w3.org/ns/activitystreams#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+
+<http://example.org/post1> a agentic:AnsweredPost ;
+    agentic:hasQuestion "What is RDF?" ;
+    agentic:hasAnswer "RDF is..." ;
+    as:replies <http://example.org/answer1> .
+
+<http://example.org/answer1> a as:Note ;
+    as:content "RDF is..." ;
+    as:inReplyTo <http://example.org/post1> .
+```
+
+## Integration with whyis_fediverse
+
+1. Install both plugins in your Whyis application
+2. Users post questions via whyis_fediverse UI
+3. QuestionAnsweringAgent detects and answers
+4. Answers appear in whyis_fediverse discussion threads
+
+## SPARQL Query Tool
+
+The agent can query the knowledge graph directly using SPARQL:
+
+### How It Works
+
+1. When the AI needs specific data, it calls the `query_knowledge_graph` tool
+2. The tool executes SPARQL queries on `app.db` (the full graph)
+3. Returns structured results with optional graph introspection
+4. AI uses the data to provide accurate, evidence-based answers
+
+### Features
+
+**Direct Queries:**
+```sparql
+SELECT ?person ?name WHERE {
+  ?person a foaf:Person ;
+          foaf:name ?name .
+} LIMIT 10
+```
+
+**Graph Introspection:**
+When `introspect=true`, the tool first queries:
+- Top 10 classes by count
+- Top 10 properties by usage
+
+This helps the AI understand graph structure before querying.
+
+**Entity Resolution Integration:**
+When `use_entity_resolver=true`, the tool suggests:
+- Resolve entities first to get correct URIs
+- Use those URIs in SPARQL queries
+
+### Example
+
+**Question:** "How many organizations are in the database?"
+
+**AI's internal process:**
+1. Calls `query_knowledge_graph(query="SELECT ?type (COUNT(?s) as ?count) WHERE { ?s a ?type } GROUP BY ?type LIMIT 10", introspect=true)`
+2. Gets: `{top_classes: [{"type": "org:Organization", "count": 15}, ...]}`
+3. Calls `query_knowledge_graph(query="SELECT (COUNT(?org) as ?count) WHERE { ?org a org:Organization }")`
+4. Gets: `{count: 15, results: [...]}`
+5. Answers: "There are 15 organizations in the database."
+
+### Query Guidelines
+
+- Use standard SPARQL syntax (SELECT, ASK, CONSTRUCT)
+- Common prefixes available: rdf, rdfs, owl, dc, foaf, skos, org
+- Results limited to 100 rows for performance
+- Combine with entity resolver for entity-specific queries
+
+## Entity Resolution Tool
+
+The agent automatically uses Whyis's entity resolver to ground answers in the knowledge graph:
+
+### How It Works
+
+1. When the AI needs to look up an entity, it calls the `resolve_entity` tool
+2. The tool queries Whyis's entity resolver (configured in your Whyis app)
+3. Returns matching entities with URIs, labels, types, and relevance scores
+4. AI uses this information to provide more accurate, grounded answers
+
+### Example
+
+**Question:** "What did Tim Berners-Lee create?"
+
+**AI's internal process:**
+1. Calls `resolve_entity(term="Tim Berners-Lee")`
+2. Gets: `{uri: "http://dbpedia.org/resource/Tim_Berners-Lee", label: "Tim Berners-Lee", types: ["Person"]}`
+3. Uses the URI to provide grounded answer about his work
+
+### Configuration
+
+The entity resolver uses Whyis's configured `EntityResolverListener` plugins:
+- SPARQL endpoints (via Fuseki plugin)
+- Neptune database (via Neptune plugin)
+- Custom resolvers (implement `EntityResolverListener`)
+
+No additional configuration needed - the tool automatically uses whatever entity resolver is available in your Whyis app.
+
+## Customization
+
+### Custom System Prompt
+
+```bash
+export AGENTIC_SYSTEM_PROMPT="You are an expert in semantic web technologies and knowledge graphs. Provide detailed, accurate answers with examples."
+```
+
+### Different AI Model
+
+```bash
+export AGENTIC_MODEL="gpt-3.5-turbo"  # For faster/cheaper responses
+```
+
+### Custom Agent Subclass
+
+```python
+from whyis_agentic.agent import QuestionAnsweringAgent
+
+class MyCustomAgent(QuestionAnsweringAgent):
+    def get_query(self):
+        # Override to detect different types of questions
+        return '''
+        SELECT DISTINCT ?resource WHERE {
+            ?resource a as:Note ;
+                      as:content ?content .
+            FILTER (REGEX(?content, "custom pattern"))
+        }
+        '''
+    
+    def process_nanopub(self, i, o, nanopub):
+        # Add custom processing
+        super().process_nanopub(i, o, nanopub)
+        # Additional custom logic here
+```
+
+## Troubleshooting
+
+### Agent Not Answering
+
+1. Check logs for errors:
+   ```bash
+   tail -f /var/log/whyis/whyis.log
+   ```
+
+2. Verify API key is set:
+   ```bash
+   echo $GITHUB_TOKEN
+   ```
+
+3. Check SPARQL query is finding questions:
+   ```sparql
+   PREFIX as: <https://www.w3.org/ns/activitystreams#>
+   
+   SELECT * WHERE {
+       ?post a as:Note ;
+             as:content ?content .
+       FILTER (REGEX(?content, "\\?$"))
+   }
+   ```
+
+### API Rate Limits
+
+If hitting rate limits:
+1. Use a different model (gpt-3.5-turbo)
+2. Add caching logic in custom agent
+3. Implement rate limiting in process_nanopub()
+
+### Wrong Answers
+
+1. Adjust system prompt for better context
+2. Add tools/functions for knowledge graph queries
+3. Pre-filter questions by topic
+
+## Development
+
+### Testing Locally
+
+```python
+from whyis_agentic.agent import QuestionAnsweringAgent
+
+agent = QuestionAnsweringAgent()
+
+# Check the SPARQL query
+print(agent.get_query())
+
+# Test answer generation
+answer, steps = agent._generate_answer("What is RDF?")
+print(answer)
+print(steps)
+```
+
+### Adding Tools
+
+```python
+def search_knowledge_graph(query: str) -> str:
+    """Search the knowledge graph."""
+    # SPARQL query implementation
+    return results
+
+# Add to agent (requires modifying agent to support tool parameter)
+```
+
+## Best Practices
+
+1. **Set specific system prompts** for your domain
+2. **Monitor token usage** via thinking steps metadata
+3. **Review answers** before deploying to production
+4. **Rate limit** API calls if needed
+5. **Cache common answers** for efficiency
+6. **Log all interactions** for debugging
