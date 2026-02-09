@@ -99,6 +99,167 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
             logger.error(f"Error resolving entity '{term}': {e}")
             return []
 
+    def _query_knowledge_graph(
+        self, query: str, introspect: bool = False, use_entity_resolver: bool = False
+    ) -> Dict:
+        """
+        Query the knowledge graph using SPARQL.
+
+        This tool allows the AI to query app.db (the full graph) with SPARQL
+        to retrieve specific information. It can introspect the graph structure
+        and use entity resolution for better queries.
+
+        Args:
+            query: The SPARQL query to execute
+            introspect: If True, first introspects the graph to understand structure
+            use_entity_resolver: If True, suggests using entity resolver for better results
+
+        Returns:
+            Dict with query results and metadata
+        """
+        try:
+            app = flask.current_app
+            if not hasattr(app, "db"):
+                logger.warning("Knowledge graph database not available")
+                return {"error": "Database not available", "results": []}
+
+            result_data = {"results": [], "metadata": {}}
+
+            # Introspection: get graph statistics if requested
+            if introspect:
+                try:
+                    # Get class counts
+                    class_query = """
+                    SELECT ?type (COUNT(?s) as ?count)
+                    WHERE {
+                        ?s a ?type .
+                    }
+                    GROUP BY ?type
+                    ORDER BY DESC(?count)
+                    LIMIT 10
+                    """
+                    class_results = list(app.db.query(class_query, initNs=app.NS.prefixes))
+                    result_data["metadata"]["top_classes"] = [
+                        {"type": str(t), "count": int(c)} for t, c in class_results
+                    ]
+
+                    # Get property counts
+                    prop_query = """
+                    SELECT ?property (COUNT(?s) as ?count)
+                    WHERE {
+                        ?s ?property ?o .
+                    }
+                    GROUP BY ?property
+                    ORDER BY DESC(?count)
+                    LIMIT 10
+                    """
+                    prop_results = list(app.db.query(prop_query, initNs=app.NS.prefixes))
+                    result_data["metadata"]["top_properties"] = [
+                        {"property": str(p), "count": int(c)} for p, c in prop_results
+                    ]
+
+                    logger.info("Graph introspection completed")
+                except Exception as e:
+                    logger.warning(f"Introspection failed: {e}")
+                    result_data["metadata"]["introspection_error"] = str(e)
+
+            # Execute the main query
+            try:
+                # Execute with namespace prefixes
+                query_results = list(app.db.query(query, initNs=app.NS.prefixes))
+
+                # Format results
+                formatted_results = []
+                for row in query_results[:100]:  # Limit to 100 results
+                    if isinstance(row, tuple):
+                        # Convert tuple of RDF terms to dict
+                        formatted_row = {}
+                        for i, val in enumerate(row):
+                            key = f"var{i}"
+                            if hasattr(val, "n3"):
+                                formatted_row[key] = str(val)
+                            else:
+                                formatted_row[key] = str(val)
+                        formatted_results.append(formatted_row)
+                    else:
+                        formatted_results.append({"value": str(row)})
+
+                result_data["results"] = formatted_results
+                result_data["count"] = len(formatted_results)
+                result_data["total_found"] = len(query_results)
+
+                logger.info(f"Query executed: found {len(query_results)} results")
+
+            except Exception as e:
+                logger.error(f"Query execution failed: {e}")
+                result_data["error"] = str(e)
+                result_data["suggestion"] = (
+                    "Check SPARQL syntax. Use PREFIX declarations or " "try simpler queries first."
+                )
+
+            # Add entity resolver suggestion
+            if use_entity_resolver:
+                result_data["metadata"]["entity_resolver_hint"] = (
+                    "Consider using resolve_entity tool first to find correct URIs "
+                    "for entities mentioned in the query."
+                )
+
+            return result_data
+
+        except Exception as e:
+            logger.error(f"Error querying knowledge graph: {e}")
+            return {"error": str(e), "results": []}
+
+    def _get_sparql_query_tool_definition(self) -> Dict:
+        """
+        Get the tool definition for SPARQL queries.
+
+        Returns tool specification in OpenAI function calling format.
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": "query_knowledge_graph",
+                "description": (
+                    "Query the knowledge graph using SPARQL to retrieve specific information. "
+                    "Use this to find facts, relationships, or data in the graph. "
+                    "Can introspect graph structure first and use entity resolver "
+                    "for better results. "
+                    "The query should use standard SPARQL syntax. "
+                    "Common prefixes (rdf, rdfs, owl, dc, foaf, skos) are available."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": (
+                                "The SPARQL query to execute. "
+                                "Example: 'SELECT ?s ?p ?o WHERE { ?s ?p ?o } LIMIT 10'"
+                            ),
+                        },
+                        "introspect": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, first introspect the graph to understand "
+                                "its structure (classes, properties). "
+                                "Useful when you don't know the graph schema."
+                            ),
+                        },
+                        "use_entity_resolver": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, suggests using the entity resolver to find "
+                                "correct URIs before querying. "
+                                "Useful when query involves specific entities."
+                            ),
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+
     def _get_entity_resolver_tool_definition(self) -> Dict:
         """
         Get the tool definition for entity resolution.
@@ -218,6 +379,7 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
             tools = []
             if self._tools_enabled:
                 tools.append(self._get_entity_resolver_tool_definition())
+                tools.append(self._get_sparql_query_tool_definition())
 
             thinking_steps = []
             max_iterations = 3  # Prevent infinite loops
@@ -300,7 +462,22 @@ class QuestionAnsweringAgent(autonomic.UpdateChangeService):
                                     "type": "tool_call",
                                     "tool": "resolve_entity",
                                     "arguments": function_args,
-                                    "result_count": len(result),
+                                    "result_count": len(result) if isinstance(result, list) else 0,
+                                }
+                            )
+                        elif function_name == "query_knowledge_graph":
+                            result = self._query_knowledge_graph(
+                                query=function_args.get("query", ""),
+                                introspect=function_args.get("introspect", False),
+                                use_entity_resolver=function_args.get("use_entity_resolver", False),
+                            )
+                            thinking_steps.append(
+                                {
+                                    "type": "tool_call",
+                                    "tool": "query_knowledge_graph",
+                                    "arguments": function_args,
+                                    "result_count": result.get("count", 0),
+                                    "has_error": "error" in result,
                                 }
                             )
                         else:

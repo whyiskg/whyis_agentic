@@ -11,6 +11,7 @@ A Whyis plugin that provides Gen AI agentic inference capabilities for answering
 - **Autonomic Agent**: `QuestionAnsweringAgent` extends Whyis's `UpdateChangeService` to monitor and answer questions
 - **ActivityStream Integration**: Works with ActivityStream Note posts from the `whyis_fediverse` plugin
 - **GitHub Copilot SDK**: Uses GitHub Copilot Chat Completions API (via OpenAI Python SDK)
+- **SPARQL Query Tool**: AI can query the knowledge graph with SPARQL, with introspection and entity resolution
 - **Entity Resolution Tool**: AI can resolve entities in the knowledge graph using Whyis's entity resolver
 - **Provenance Tracking**: Full RDF provenance via nanopublications
 - **Transparent Reasoning**: Records thinking steps and tool usage
@@ -60,7 +61,10 @@ export AGENTIC_SYSTEM_PROMPT="You are a helpful assistant..."
 2. **Detect**: Questions are identified by:
    - Ending with `?`
    - Starting with question words (what, when, where, who, why, how, etc.)
-3. **Resolve Entities**: If needed, the AI uses the entity resolver tool to look up entities in the knowledge graph
+3. **Query & Resolve**: The AI can use tools to gather information:
+   - Query the knowledge graph with SPARQL
+   - Resolve entities to URIs
+   - Introspect graph structure
 4. **Generate**: Uses GitHub Copilot Chat Completions API to generate an answer
 5. **Record**: Creates a nanopublication with:
    - The answer as an `as:Note` in reply to the question
@@ -79,6 +83,43 @@ The plugin defines an RDF vocabulary in `vocab.ttl`:
 - `agentic:ThinkingStep` - A step in the reasoning process
 - `agentic:answersQuestion` - Activity of answering a question
 - And more...
+
+## SPARQL Query Tool
+
+The agent includes a SPARQL query tool that allows the AI to query `app.db` (the full knowledge graph) directly. Features include:
+
+- **Direct SPARQL Queries**: Execute SELECT, ASK, CONSTRUCT queries on the full graph
+- **Graph Introspection**: Automatically discover graph structure (classes, properties) when needed
+- **Entity Resolution Integration**: Suggests using entity resolver for better query construction
+- **Result Formatting**: Returns structured results with metadata
+
+**Capabilities:**
+
+1. **Query Execution**: Run any valid SPARQL query with namespace prefixes
+2. **Pre-Query Introspection**: Get top classes and properties to understand graph schema
+3. **Smart Grounding**: Combine with entity resolver to build accurate queries
+
+**Example interaction:**
+
+```
+Question: "How many people are in the knowledge graph?"
+
+AI thinks: Let me introspect the graph first to find the right class
+Tool call: query_knowledge_graph(query="SELECT ?type (COUNT(?s) as ?count) WHERE { ?s a ?type } GROUP BY ?type LIMIT 10", introspect=true)
+Tool result: {top_classes: [{"type": "foaf:Person", "count": 42}, ...], results: [...]}
+
+AI thinks: Now I can query for people specifically
+Tool call: query_knowledge_graph(query="SELECT (COUNT(?person) as ?count) WHERE { ?person a foaf:Person }")
+Tool result: {count: 42}
+
+Answer: "There are 42 people in the knowledge graph."
+```
+
+**Query Guidelines:**
+- Standard SPARQL prefixes (rdf, rdfs, owl, dc, foaf, skos) are available
+- Results limited to 100 rows for performance
+- Use introspection when schema is unknown
+- Combine with entity resolver for entity-specific queries
 
 ## Entity Resolution Tool
 

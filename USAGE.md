@@ -94,6 +94,57 @@ The answer is stored as RDF in the knowledge graph:
 3. QuestionAnsweringAgent detects and answers
 4. Answers appear in whyis_fediverse discussion threads
 
+## SPARQL Query Tool
+
+The agent can query the knowledge graph directly using SPARQL:
+
+### How It Works
+
+1. When the AI needs specific data, it calls the `query_knowledge_graph` tool
+2. The tool executes SPARQL queries on `app.db` (the full graph)
+3. Returns structured results with optional graph introspection
+4. AI uses the data to provide accurate, evidence-based answers
+
+### Features
+
+**Direct Queries:**
+```sparql
+SELECT ?person ?name WHERE {
+  ?person a foaf:Person ;
+          foaf:name ?name .
+} LIMIT 10
+```
+
+**Graph Introspection:**
+When `introspect=true`, the tool first queries:
+- Top 10 classes by count
+- Top 10 properties by usage
+
+This helps the AI understand graph structure before querying.
+
+**Entity Resolution Integration:**
+When `use_entity_resolver=true`, the tool suggests:
+- Resolve entities first to get correct URIs
+- Use those URIs in SPARQL queries
+
+### Example
+
+**Question:** "How many organizations are in the database?"
+
+**AI's internal process:**
+1. Calls `query_knowledge_graph(query="SELECT ?type (COUNT(?s) as ?count) WHERE { ?s a ?type } GROUP BY ?type LIMIT 10", introspect=true)`
+2. Gets: `{top_classes: [{"type": "org:Organization", "count": 15}, ...]}`
+3. Calls `query_knowledge_graph(query="SELECT (COUNT(?org) as ?count) WHERE { ?org a org:Organization }")`
+4. Gets: `{count: 15, results: [...]}`
+5. Answers: "There are 15 organizations in the database."
+
+### Query Guidelines
+
+- Use standard SPARQL syntax (SELECT, ASK, CONSTRUCT)
+- Common prefixes available: rdf, rdfs, owl, dc, foaf, skos, org
+- Results limited to 100 rows for performance
+- Combine with entity resolver for entity-specific queries
+
 ## Entity Resolution Tool
 
 The agent automatically uses Whyis's entity resolver to ground answers in the knowledge graph:
